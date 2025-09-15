@@ -25,11 +25,14 @@ classifiers = [
 requires-python = ">=3.10"
 dependencies = [
     "dotenv>=0.9.9",
+    "fastapi>=0.116.1",
+    "fastmcp>=2.12.3",
     "httpx>=0.28.1",
     "mcp[cli]>=1.4.1",
     "nest-asyncio>=1.6.0",
     "python-dotenv>=1.1.0",
-    "telethon>=1.39.0"
+    "telethon>=1.39.0",
+    "uvicorn>=0.34.0",
 ]
 
 [project.urls]

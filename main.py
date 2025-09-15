@@ -13,7 +13,8 @@ from typing import List, Dict, Optional, Union, Any
 # Third-party libraries
 import nest_asyncio
 from dotenv import load_dotenv
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
+from fastmcp.tools.tool import ToolResult
 from telethon import TelegramClient, functions, utils
 from telethon.sessions import StringSession
 from telethon.tl.types import (
@@ -2508,18 +2509,183 @@ async def get_pinned_messages(chat_id: int) -> str:
         return log_and_format_error("get_pinned_messages", e, chat_id=chat_id)
 
 
+
+# --- FastAPI REST API integration ---
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+import uvicorn
+
+app = FastAPI()
+tool_registry = {}
+
+tool_registry.update({
+        'get_chats': get_chats,
+        'get_messages': get_messages,
+        'send_message': send_message,
+        'list_contacts': list_contacts,
+        'search_contacts': search_contacts,
+        'get_contact_ids': get_contact_ids,
+        'list_messages': list_messages,
+        'list_chats': list_chats,
+        'get_chat': get_chat,
+        'get_direct_chat_by_contact': get_direct_chat_by_contact,
+        'get_contact_chats': get_contact_chats,
+        'get_last_interaction': get_last_interaction,
+        'get_message_context': get_message_context,
+        'add_contact': add_contact,
+        'delete_contact': delete_contact,
+        'block_user': block_user,
+        'unblock_user': unblock_user,
+        'get_me': get_me,
+        'create_group': create_group,
+        'invite_to_group': invite_to_group,
+        'leave_chat': leave_chat,
+        'get_participants': get_participants,
+        'send_file': send_file,
+        'download_media': download_media,
+        'update_profile': update_profile,
+        'set_profile_photo': set_profile_photo,
+        'delete_profile_photo': delete_profile_photo,
+        'get_privacy_settings': get_privacy_settings,
+        'set_privacy_settings': set_privacy_settings,
+        'import_contacts': import_contacts,
+        'export_contacts': export_contacts,
+        'get_blocked_users': get_blocked_users,
+        'create_channel': create_channel,
+        'edit_chat_title': edit_chat_title,
+        'edit_chat_photo': edit_chat_photo,
+        'delete_chat_photo': delete_chat_photo,
+        'promote_admin': promote_admin,
+        'demote_admin': demote_admin,
+        'ban_user': ban_user,
+        'unban_user': unban_user,
+        'get_admins': get_admins,
+        'get_banned_users': get_banned_users,
+        'get_invite_link': get_invite_link,
+        'join_chat_by_link': join_chat_by_link,
+        'export_chat_invite': export_chat_invite,
+        'import_chat_invite': import_chat_invite,
+        'send_voice': send_voice,
+        'forward_message': forward_message,
+        'edit_message': edit_message,
+        'delete_message': delete_message,
+        'pin_message': pin_message,
+        'unpin_message': unpin_message,
+        'mark_as_read': mark_as_read,
+        'reply_to_message': reply_to_message,
+        'get_media_info': get_media_info,
+        'search_public_chats': search_public_chats,
+        'search_messages': search_messages,
+        'resolve_username': resolve_username,
+        'mute_chat': mute_chat,
+        'unmute_chat': unmute_chat,
+        'archive_chat': archive_chat,
+        'unarchive_chat': unarchive_chat,
+        'get_sticker_sets': get_sticker_sets,
+        'send_sticker': send_sticker,
+        'get_gif_search': get_gif_search,
+        'send_gif': send_gif,
+        'get_bot_info': get_bot_info,
+        'set_bot_commands': set_bot_commands,
+        'get_history': get_history,
+        'get_user_photos': get_user_photos,
+        'get_user_status': get_user_status,
+        'get_recent_actions': get_recent_actions,
+        'get_pinned_messages': get_pinned_messages,
+    })
+
+@app.post("/mcp/{tool_name}")
+async def call_mcp_tool_post(tool_name: str, request: Request):
+    """
+    Call an MCP tool by name using POST. Expects JSON body with tool arguments.
+    """
+    try:
+        # Get the tool function from registry
+        tool_func = tool_registry.get(tool_name)
+        if not tool_func:
+            return JSONResponse({"error": f"Tool '{tool_name}' not found."}, status_code=404)
+
+        # Get parameters from JSON body
+        params = await request.json() if request.headers.get("content-type") == "application/json" else {}
+        
+        # Call the tool function
+        result_obj = await tool_func.run(arguments=params)
+        mcp_result = result_obj.to_mcp_result()  # returns list[ContentBlock] or (list, dict)
+
+        if isinstance(mcp_result, tuple):
+            content_blocks, structured_data = mcp_result
+        else:
+            content_blocks = mcp_result
+            structured_data = None
+
+        # Convert content_blocks to simple strings (or other serializable form)
+        serialized_content = [str(block) for block in content_blocks]
+
+        return JSONResponse({"content": serialized_content, "structured_content": structured_data})
+
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.get("/mcp/{tool_name}")
+async def call_mcp_tool_get(tool_name: str, request: Request):
+    """
+    Call an MCP tool by name using GET. Accepts query parameters as tool arguments.
+    """
+    try:
+        # Get the tool function from registry
+        tool_func = tool_registry.get(tool_name)
+        if not tool_func:
+            return JSONResponse({"error": f"Tool '{tool_name}' not found."}, status_code=404)
+
+        params = dict(request.query_params)
+        # Try to convert numeric values and handle lists
+        for k, v in params.items():
+            if v.isdigit():
+                params[k] = int(v)
+            elif v.lower() in ["true", "false"]:
+                params[k] = v.lower() == "true"
+            # Handle comma-separated lists for parameters like user_ids
+            elif ',' in v:
+                # Try to convert to list of ints if all are digits
+                items = v.split(',')
+                if all(item.strip().isdigit() for item in items):
+                    params[k] = [int(item.strip()) for item in items]
+                else:
+                    params[k] = [item.strip() for item in items]
+        
+        # Call the tool function
+        result_obj = await tool_func.run(arguments=params)
+        mcp_result = result_obj.to_mcp_result()  # returns list[ContentBlock] or (list, dict)
+
+        if isinstance(mcp_result, tuple):
+            content_blocks, structured_data = mcp_result
+        else:
+            content_blocks = mcp_result
+            structured_data = None
+
+        # Convert content_blocks to simple strings (or other serializable form)
+        serialized_content = [str(block) for block in content_blocks]
+
+        return JSONResponse({"content": serialized_content, "structured_content": structured_data})
+
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+# Add endpoint to list available tools
+@app.get("/mcp/")
+async def list_tools():
+    """List all available MCP tools"""
+    return JSONResponse({"tools": list(tool_registry.keys())})
+
 if __name__ == "__main__":
     nest_asyncio.apply()
-
-    async def main() -> None:
+    import sys
+    import sqlite3
+    async def startup():
         try:
-            # Start the Telethon client non-interactively
             print("Starting Telegram client...")
             await client.start()
-
-            print("Telegram client started. Running MCP server...")
-            # Use the asynchronous entrypoint instead of mcp.run()
-            await mcp.run_stdio_async()
+            print("Telegram client started. Running FastAPI MCP server...")
         except Exception as e:
             print(f"Error starting client: {e}", file=sys.stderr)
             if isinstance(e, sqlite3.OperationalError) and "database is locked" in str(e):
@@ -2528,5 +2694,5 @@ if __name__ == "__main__":
                     file=sys.stderr,
                 )
             sys.exit(1)
-
-    asyncio.run(main())
+    asyncio.get_event_loop().run_until_complete(startup())
+    uvicorn.run(app, host="0.0.0.0", port=8000)
